@@ -1,0 +1,28 @@
+{
+    "name": "arcade-ExScreen",
+    "description": "",
+    "dependencies": {
+        "device": "*",
+        "edge-connector": "*",
+        "palette": "*"
+    },
+    "files": [
+        "main.ts",
+        "README.md",
+        "assets.json",
+        "test.ts",
+        "tilemap.g.jres",
+        "tilemap.g.ts"
+    ],
+    "testFiles": [
+        "test.ts"
+    ],
+    "targetVersions": {
+        "target": "1.11.37",
+        "targetId": "arcade"
+    },
+    "supportedTargets": [
+        "arcade"
+    ],
+    "preferredEditor": "tsprj"
+}
