@@ -7,15 +7,14 @@
         "palette": "*"
     },
     "files": [
-        "main.ts",
         "README.md",
         "assets.json",
-        "test.ts",
-        "tilemap.g.jres",
-        "tilemap.g.ts"
+        "ex-screen.ts"
     ],
     "testFiles": [
-        "test.ts"
+        "main.ts",
+        "tilemap.g.jres",
+        "tilemap.g.ts"
     ],
     "targetVersions": {
         "target": "1.11.37",
