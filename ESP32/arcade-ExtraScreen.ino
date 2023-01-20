@@ -1,20 +1,5 @@
 /** 
- * bak13
- *  print status at esp side, with custom drawChar_rvX()
- * bak12 
- *  tested sync up frame, failed
- *  add dynamic fps calculation
- *  print status at esp side
- * bak11
- *  Each frame include Screen Pixels + Pallete + Brightness. Stat msg printed on screen at arcade side. 
- *  SPI Slave rx didn't sync up with arcade package. Work around: add a magic number check.
- * bak10, ili9341 worked fine. Only 1 package type (19200 for screen)
- * bak9, add Arcade Status Bar support
- * bak8, TFT 2-segments DMA buffer of 240*320. Avoid 2 setWindow() vs 4-segments.
- * bak7, swapbyte=false, save 4ms; tft.endWrite() at next loop to avoid it waiting DMA transfer finish inside, save 8ms
- * bak6, swap TFT to HSPI, and SPISlave to VSPI, worked like a charm.
-
- * @file testESP32SpiDMASlave.ino
+ * @file arcade-ExtraScreen.ino
  * @author your name (you@domain.com)
  * @brief 
  * worked well at 27fps(depends on arcade)
@@ -66,15 +51,19 @@
 //generic const
 #define ARCADE_WIDTH  120
 #define ARCADE_HEIGHT  160
-#define ARCADE_STAT_WIDTH  8
-#define BUFFER_SIZE_SCREEN   ARCADE_WIDTH*ARCADE_HEIGHT 
+
+//package
+#define PACKAGE_DEVIDER 4
+#define BUFFER_SIZE_SCREEN   ARCADE_WIDTH*ARCADE_HEIGHT /PACKAGE_DEVIDER
+#define BUFFER_SIZE  (BUFFER_SIZE_SCREEN + 4) //align to 4-byte
 #define BUFFER_SIZE_PALLETE   48
 #define BUFFER_SIZE_STATUS   20
 #define BUFFER_SIZE_BRIGHTNESS 1
-#define BUFFER_SIZE  (BUFFER_SIZE_SCREEN+BUFFER_SIZE_PALLETE+BUFFER_SIZE_STATUS+BUFFER_SIZE_BRIGHTNESS+3) //align to 4-byte
-#define OFFSET_PALLETE      BUFFER_SIZE_SCREEN
+#define OFFSET_PALLETE      0
 #define OFFSET_STATUS       OFFSET_PALLETE+BUFFER_SIZE_PALLETE
 #define OFFSET_BRIGHTNESS   OFFSET_STATUS+BUFFER_SIZE_STATUS
+#define OFFSET_INDEX        BUFFER_SIZE_SCREEN
+// #define ARCADE_STAT_WIDTH  8
 
 //SPI Slave
 #include <ESP32DMASPISlave.h>
@@ -88,7 +77,7 @@ uint32_t newdata=0;
 TFT_eSPI tft = TFT_eSPI();  // Invoke library, pins defined in User_Setup.h
 uint16_t *tft_dma_bufs[2];//for DMA TFT
 // uint16_t *tft_dma_statbufs[2];//for DMA TFT
-// uint8_t bufIdx=0;
+uint8_t bufIdx=0;
 
 //debug/diag
 const int btnOutputLog=0;
@@ -101,11 +90,11 @@ uint8_t msFrameIdx=0;
 
 void initSpiSlave(){
     // to use DMA buffer, use these methods to allocate buffer
-    spi_slave_rx_buf = slave.allocDMABuffer(BUFFER_SIZE+200);//4 byte align, extra bytes to avoid trigger extra rx 0-size packet.
+    spi_slave_rx_buf = slave.allocDMABuffer(BUFFER_SIZE);//4 byte align, extra bytes to avoid trigger extra rx 0-size packet.
 
     // slave device configuration
     slave.setDataMode(SPI_MODE0);
-    slave.setMaxTransferSize(BUFFER_SIZE+200);
+    slave.setMaxTransferSize(BUFFER_SIZE+16);
     // slave.setDMAChannel(2); //2 or defaut Auto, TFT_eSPI using channel 1
 
     // begin() after setting
@@ -122,7 +111,7 @@ void initTft(){
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_DARKGREY, TFT_BLACK);
     tft.drawCentreString("Makecode Arcade",120,260,2);
-    tft.drawCentreString("Extra Screen v0.1",120,280,2);
+    tft.drawCentreString("Extra Screen v0.11",120,280,2);
     tft.drawCentreString("ready",120,300,1);
     tft.setSwapBytes(false);    //use false with swaped colors,avoid swap everytime, -4ms
 
@@ -142,8 +131,8 @@ void initTft(){
     tft.writecommand(TFT_MADCTL);tft.writedata(TFT_MAD_COLOR_ORDER);
     tft.setAddrWindow(0, 0, 120, 160);
     tft.initDMA();
-    tft_dma_bufs[0] =(uint16_t*)(void*) slave.allocDMABuffer(BUFFER_SIZE_SCREEN*2*4/2); // half of 240*320 in 16bit
-    tft_dma_bufs[1] =(uint16_t*)(void*) slave.allocDMABuffer(BUFFER_SIZE_SCREEN*2*4/2); // half of 240*320 in 16bit
+    tft_dma_bufs[0] =(uint16_t*)(void*) slave.allocDMABuffer(BUFFER_SIZE_SCREEN*2*4); // double pixel, in 16bit, /PACKAGE_DEVIDER
+    tft_dma_bufs[1] =(uint16_t*)(void*) slave.allocDMABuffer(BUFFER_SIZE_SCREEN*2*4); // double pixel, in 16bit, /PACKAGE_DEVIDER
     // tft_dma_statbufs[0] =(uint16_t*)(void*) slave.allocDMABuffer(BUFFER_SIZE_STAT*2); 
     // tft_dma_statbufs[1] =(uint16_t*)(void*) slave.allocDMABuffer(BUFFER_SIZE_STAT*2); 
 }
@@ -208,13 +197,13 @@ void loop() {
         // }
 
         if(newdata==BUFFER_SIZE){
-            if(spi_slave_rx_buf[OFFSET_BRIGHTNESS+1]==0x77){
+            if(spi_slave_rx_buf[BUFFER_SIZE-3]==0x77){
                 ms=millis();
                 updateTft();
                 msFrames[msFrameIdx++]=ms;
                 if(msFrameIdx>=FpsFrameCount) {
                     msFrameIdx=0;
-                    printf("\n%d, fps:%3.2f \n",millis()-ms, 1000.0*FpsFrameCount/(millis()-msFrames[msFrameIdx]));
+                    printf("\n%d, fps:%3.2f \n",millis()-ms, 1000.0*FpsFrameCount/(PACKAGE_DEVIDER+1)/(millis()-msFrames[msFrameIdx]));
                 }
             }else{//test, failed to resolve 
                 printf("invalid frame!\n");
@@ -286,13 +275,18 @@ uint16_t palette[]={
 //SPI=27M: 120*160= 21ms, 240*320=56ms(51ms /wo digitlRead), with 0-size rx packages.
 //SPI=40M: 240*320=37ms /wo digitlRead, with more wrong rx packages.
 //SPI=20M: 240*320=67ms /wo digitlRead, with more wrong rx packages. Screen flash with error data.
+uint8_t statusMsg[20];
 void updateTft(){
+    uint8_t index=spi_slave_rx_buf[OFFSET_INDEX];
+    uint8_t *ptrRx;
+
+  if(index==0xFF){ // Misc 
     //Brightness
     #define BRIGHTNESS_FIXED (100+25) //my ili9341 a little bright than arcade 7735
     const uint8_t brightness= spi_slave_rx_buf[OFFSET_BRIGHTNESS];
     
     //Pallete
-    uint8_t *ptrRx= &spi_slave_rx_buf[OFFSET_PALLETE];
+    ptrRx= &spi_slave_rx_buf[OFFSET_PALLETE];
     for(int i=0;i<16;i++){
         uint16_t c= 
             (((uint16_t)(*ptrRx++)*brightness/BRIGHTNESS_FIXED)&0xF8)<<8 | //R 5bit
@@ -301,16 +295,19 @@ void updateTft(){
         palette[i]= c<<8|c>>8;
     }
 
-    //Screen
+    for(int i=0;i<20;i++){
+        statusMsg[i]= spi_slave_rx_buf[OFFSET_STATUS+i];
+    }
+
+  }else{ //Screen
     // printf(" %dth start", count);
-    ptrRx=&spi_slave_rx_buf[0];
-    for(size_t j=0;j<2;j++){
-        for (size_t y = 0; y < ARCADE_HEIGHT>>1; ++y) {
+        ptrRx=&spi_slave_rx_buf[0];
+        for (size_t y = 0; y < ARCADE_HEIGHT/PACKAGE_DEVIDER; ++y) {
             //read from, every row
             // uint8_t *ptrRx=&spi_slave_rx_buf[(y+(j<1?0:ARCADE_HEIGHT>>1))*ARCADE_WIDTH]; //+((j%2==0)?0:(ARCADE_WIDTH>>1))
             //write to, every 2 rows,
-            uint16_t *ptr=&tft_dma_bufs[j][2*y*TFT_WIDTH];             
-            uint16_t *ptr2=&tft_dma_bufs[j][(2*y+1)*TFT_WIDTH];
+            uint16_t *ptr=&tft_dma_bufs[bufIdx][2*y*TFT_WIDTH];             
+            uint16_t *ptr2=&tft_dma_bufs[bufIdx][(2*y+1)*TFT_WIDTH];
             for (size_t x = 0; x < ARCADE_WIDTH ; ++x) { 
                 uint16_t const c=palette[*ptrRx++];
                 *ptr++ =c;  *ptr++ =c;
@@ -318,13 +315,13 @@ void updateTft(){
                 
                 // if(!digitalRead(btnOutputLog)){
                 //     if(i<64||i>(newdata-64))
-                //         printf("%04X ", tft_dma_bufs[j][i]);
+                //         printf("%04X ", tft_dma_bufs[bufIdx][i]);
                 // }
             }
         }
 
         //Status
-        if(j==0){
+        if(index==0){
 // unsigned long ms2=micros();
             // tft.endWrite();  //this will wait completed of prev transfer
             // DMA_BUSY_CHECK;
@@ -333,22 +330,20 @@ void updateTft(){
             // const char* ptrStatus=(char*)(void*)&spi_slave_rx_buf[OFFSET_STATUS];
             // tft.drawString(ptrStatus, 0, 0, 2);
             for(int i=0;i<20;i++){
-                drawChar_rvX(TFT_WIDTH-(i*8+2), 2,spi_slave_rx_buf[OFFSET_STATUS+i], 0xFFFF);
+                drawChar_rvX(TFT_WIDTH-(i*6+2), 2,statusMsg[i], 0xFFFF);
             }
             // printf("Status end\n");
 // printf("%d ",micros()-ms2);
         }
 
-        tft.endWrite();  //this will wait completed of prev transfer
-        tft.setAddrWindow(0, (TFT_HEIGHT>>1)*j, TFT_WIDTH, TFT_HEIGHT>>1);
-        tft.startWrite();
-        tft.pushPixelsDMA(&tft_dma_bufs[j][0], BUFFER_SIZE_SCREEN*2);
-        
-
     // printf(" %d# ",j);
+      tft.endWrite();  //this will wait completed of prev transfer
+      tft.setAddrWindow(0, (TFT_HEIGHT/PACKAGE_DEVIDER)*index, TFT_WIDTH, TFT_HEIGHT/PACKAGE_DEVIDER);
+      tft.startWrite();
+      tft.pushPixelsDMA(&tft_dma_bufs[bufIdx][0], BUFFER_SIZE_SCREEN*4);
+      
+      bufIdx=1-bufIdx;
     }
-
-
 
     // printf("%dth end", count);
 }
