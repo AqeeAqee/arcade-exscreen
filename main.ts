@@ -69,3 +69,10 @@ controller.B.onEvent(ControllerButtonEvent.Pressed, function () {
     info.setLife(screen.brightness())
 })
 */
+
+//debug, for awaring successly downloaded.
+let ver = settings.readNumber("ver")
+if (!ver) ver = 0
+settings.writeNumber("ver", ++ver)
+info.setLife(ver)
+
