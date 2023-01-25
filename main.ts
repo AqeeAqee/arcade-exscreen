@@ -1,4 +1,4 @@
-game.stats=true
+game.stats=true 
 
 scene.setBackgroundColor(7)
 tiles.setCurrentTilemap(tilemap`level2`)
@@ -21,8 +21,12 @@ let mySprite = sprites.create(img`
     . . . . . f f . . f f . . . . .
 `, SpriteKind.Player)
 controller.moveSprite(mySprite)
+mySprite.vx=100
+mySprite.vy=120
 scene.cameraFollowSprite(mySprite)
+mySprite.setBounceOnWall(true)
 
+////// extraScreen
 extraScreen.init()
 extraScreen.DisplayOnInnerScreen=true
 

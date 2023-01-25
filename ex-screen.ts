@@ -13,6 +13,7 @@
  *   021 or 0% error when open menu with innerScreen turned off.
  */
 
+
 //% color="#275C6B" icon="\uf26c" weight=95 block="ExtraScreen"
 namespace extraScreen {
     export let DisplayOnExtraScreen = true
@@ -23,30 +24,119 @@ namespace extraScreen {
     export const TFTHEIGHT = 160
 
     //package:
-    const PACKAGE_DEVIDER=4
-    const BUFFER_SIZE_SCREEN = TFTWIDTH * TFTHEIGHT/ PACKAGE_DEVIDER
+    const PACKAGE_DEVIDER = 4
+    const BUFFER_SIZE_SCREEN = TFTWIDTH * TFTHEIGHT / PACKAGE_DEVIDER
     const BUFFER_SIZE_PALLETE = 48
     const BUFFER_SIZE_STATUS = 20
     const BUFFER_SIZE_BRIGHTNESS = 1
-    const OFFSET_INDEX = BUFFER_SIZE_SCREEN 
-    const bufs:Buffer[]=[
-        control.createBuffer(BUFFER_SIZE_SCREEN + 4), //aligned to 4-byte
-        control.createBuffer(BUFFER_SIZE_SCREEN + 4)]
-    let bufIdx=0;
+    const OFFSET_INDEX = BUFFER_SIZE_SCREEN
+    const OFFSET_CHECKCODE = OFFSET_INDEX+1
+
+    const txBuffer=control.createBuffer(BUFFER_SIZE_SCREEN + 4) //aligned to 4-byte
+
     //check code
-    // buf.setUint8(OFFSET_INDEX + 1, 0x77)
-    // buf.setUint8(OFFSET_INDEX + 2, 0x07)
-    // buf.setUint8(OFFSET_INDEX + 3, 0x05)
+    const bufCheckCode=control.createBuffer(3)
+    bufCheckCode.setUint8(0, 0x77)
+    bufCheckCode.setUint8(1, 0x07)
+    bufCheckCode.setUint8(2, 0x05)
     //Pallete+Status+Brightness+...+Index=0xFF+check code
     const OFFSET_PALLETE = 0
     const OFFSET_STATUS = OFFSET_PALLETE + BUFFER_SIZE_PALLETE
     const OFFSET_BRIGHTNESS = OFFSET_STATUS + BUFFER_SIZE_STATUS
 
-    let lastSendScreenTime = 0
+    let cloneScreen:Image
 
-    //debug
-    let ms = 0, msStart = 0, count = 0
+    let msLastFrameStart = control.millis()
 
+    let statUpdated = false
+    let statusMsg = ""
+
+    //clone arcade screen to lcd
+    export function cloneScreen_ColorIndex() {
+        cloneScreen=screen.clone() //backup screen, avoid mismatch between sections
+        control.runInParallel(() => {
+            for (let i = 0; i < PACKAGE_DEVIDER; i++) {
+                //screen, about 1.5ms
+                cloneScreen.getRows(Math.idiv(i * screen.width , PACKAGE_DEVIDER), txBuffer)
+                txBuffer.setUint8(OFFSET_INDEX, i)
+                txBuffer.write(OFFSET_CHECKCODE, bufCheckCode)
+                pins.spiTransfer(txBuffer, null)
+                control.waitMicros(2500) //or 0% error
+            }
+
+            //pallete, 17micros
+            txBuffer.write(OFFSET_PALLETE, palette.getCurrentColors().buf)
+
+            //status
+            if (statUpdated) {
+                {//send out text, 70micros
+                    let i = 0, offset = OFFSET_STATUS + i
+                    for (; i < statusMsg.length; i++)
+                        txBuffer.setUint8(offset++, statusMsg.charCodeAt(i))
+                    for (; i < 20; i++)
+                        txBuffer.setUint8(offset++, 0x20)
+                }
+                statUpdated = false
+            }
+            //brightness
+            txBuffer.setUint8(OFFSET_BRIGHTNESS, screen.brightness())
+            txBuffer.setUint8(OFFSET_INDEX, 0xFF)
+            txBuffer.write(OFFSET_CHECKCODE, bufCheckCode)
+            pins.spiTransfer(txBuffer, null)
+            control.waitMicros(2500) //or more
+        })
+    }
+
+    export function init() {
+        // pins.spiMode(3)
+        // pins.spiFrequency(25000000)
+        // pins.spiWrite(0x77) //write any thing to init spi, or lcd can init failed.
+        // control.waitMicros(1000*1000)
+
+        // if(csPin){
+        //     if (control.ramSize() > 1024 * 1024 * 16) {
+        //     //simulator, walk around pins issue, it doesn't kown some pins
+        //         csPin = pins.P0
+        //         scene.backgroundImage().printCenter("simulator", 0, 2)
+        //     }else
+        //         csPin.digitalWrite(false)
+        // }
+
+        //% shim=pxt::updateScreen
+        function updateScreen(img: Image) { }
+        control.__screen.setupUpdate(() => {
+            // let ms1 = control.micros()
+            if (DisplayOnExtraScreen){
+                if (msLastFrameStart + 30 - control.millis() > 0) {
+                    screen.drawLine(0, 0, msLastFrameStart + 30 - control.millis(), 0, 2)
+                }
+                //delay:18ms@devider=4; 30@devider=2
+                pause((msLastFrameStart + 30 - control.millis())) // min DMA spiTransfer time + innerScreen DMA time
+                //+ (DisplayOnInnerScreen?0:5)
+                msLastFrameStart = control.millis()
+
+                extraScreen.cloneScreen_ColorIndex()
+            }
+            // ms1 = control.micros() - ms1
+            // info.setLife(ms1)
+
+            // let ms2 = control.micros()
+            if (DisplayOnInnerScreen)
+                updateScreen(screen) //13.7ms, 30->42.1fps if skip.
+            // ms2 = control.micros() - ms2
+        })
+
+        //% shim=pxt::updateScreenStatusBar
+        function updateScreenStatusBar(img: Image): void { return }
+        const onStats_origin = control.EventContext.onStats
+        control.EventContext.onStats = function (msg: string) {
+            statusMsg = msg.slice(0, 20)
+            statUpdated = true
+            onStats_origin(msg)
+        }
+    }
+
+    /*
     let colors16bit: number[]
     function prepareArcadeColors() {
         const hexChar = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B", "C", "D", "E", "F",]
@@ -66,7 +156,8 @@ namespace extraScreen {
         }
         // console.log(colors16bit)
     }
-    // prepareArcadeColors()
+    prepareArcadeColors()
+    */
     /** results:
     0  0000 0000000000000000
     1  FFFF 1111111111111111
@@ -86,112 +177,4 @@ namespace extraScreen {
     15 0000 0000000000000000
      */
     //0,65535,63748,64664,64518,65441,9460,32490,501,34719,35192,42003,23053,59000,37415,0
-
-    let statUpdated = false
-    let statusMsg = ""
-    // const statBuf = control.createBuffer(160 * 8)
-
-    //clone arcade screen to lcd
-    export function cloneScreen_ColorIndex() {
-        // //debug
-        // if (lastSendScreenTime + 31 - control.millis() > 0) {
-        //     screen.drawLine(0, 0, lastSendScreenTime + 31 - control.millis(), 0, 2)
-        // }
-        // if (msStart == 0) msStart = control.micros()
-        // count++
-
-        lastSendScreenTime = control.millis()
-        pause(lastSendScreenTime + 31 - control.millis()) // min interal = transfer time to extra screen = (240*320*16)/40M= 30.72ms
-
-      control.runInParallel(()=>{
-// let ms1 = control.micros()
-
-        for(let i=0;i<PACKAGE_DEVIDER;i++){
-            //screen, about 1.5ms
-            screen.getRows(i*screen.width/PACKAGE_DEVIDER, bufs[bufIdx])
-            bufs[bufIdx].setUint8(OFFSET_INDEX + 0, i)
-            bufs[bufIdx].setUint8(OFFSET_INDEX + 1, 0x77)
-            bufs[bufIdx].setUint8(OFFSET_INDEX + 2, 0x07)
-            bufs[bufIdx].setUint8(OFFSET_INDEX + 3, 0x05)
-            pins.spiTransfer(bufs[bufIdx], null)
-            control.waitMicros(1500)
-            bufIdx=1-bufIdx
-        }
-
-        //pallete, 17micros
-        bufs[bufIdx].write(OFFSET_PALLETE, palette.getCurrentColors().buf)
-
-        //status
-        if (statUpdated) {
-            {//method 1, send out text, 70micros
-            let i = 0
-            for(;i<statusMsg.length;i++)
-                bufs[bufIdx].setUint8(OFFSET_STATUS+i, statusMsg.charCodeAt(i) )
-            for (; i < 20; i++)
-                bufs[bufIdx].setUint8(OFFSET_STATUS + i, 0x20)
-            }
-            // { //method 2, print on screen, 660micros. Screen stained.
-            // screen.print(statusMsg, 2, 120-8+2,1,image.font5) //print inside 120
-            // }
-            
-            statUpdated=false
-        }
-
-        //brightness
-        bufs[bufIdx].setUint8(OFFSET_BRIGHTNESS, screen.brightness())
-
-        bufs[bufIdx].setUint8(OFFSET_INDEX + 0, 0xFF)
-        bufs[bufIdx].setUint8(OFFSET_INDEX + 1, 0x77)
-        bufs[bufIdx].setUint8(OFFSET_INDEX + 2, 0x07)
-        bufs[bufIdx].setUint8(OFFSET_INDEX + 3, 0x05)
-        
-        pins.spiTransfer(bufs[bufIdx], null)
-        // info.setLife(count * 1000 * 1000 * 1000 / (control.micros() - msStart))
-        bufIdx = 1 - bufIdx
-// ms1 = control.micros() - ms1
-// info.setScore(ms1)
-
-      })
-
-    }
-
-    export function init() {
-        pins.spiMode(0)
-        // pins.spiFrequency(25000000)
-        // pins.spiWrite(0x77) //write any thing to init spi, or lcd can init failed.
-        // control.waitMicros(1000*1000)
-
-        // if(csPin){
-        //     if (control.ramSize() > 1024 * 1024 * 16) {
-        //     //simulator, walk around pins issue, it doesn't kown some pins
-        //         csPin = pins.P0
-        //         scene.backgroundImage().printCenter("simulator", 0, 2)
-        //     }else
-        //         csPin.digitalWrite(false)
-        // }
-
-        //% shim=pxt::updateScreen
-        function updateScreen(img: Image) { }
-        control.__screen.setupUpdate(() => {
-            // let ms2 = control.micros()
-            if (DisplayOnInnerScreen)
-                updateScreen(screen) //13.7ms, 30->42.1fps if skip.
-            // ms2 = control.micros() - ms2
-
-            if (DisplayOnExtraScreen)
-                extraScreen.cloneScreen_ColorIndex()
-
-            // console.log([ms1,ms2].join())
-        })
-
-        //% shim=pxt::updateScreenStatusBar
-        function updateScreenStatusBar(img: Image): void { return }
-        const onStats_origin = control.EventContext.onStats
-        control.EventContext.onStats = function (msg: string) {
-            statusMsg = msg.slice(0, 20)
-            statUpdated = true
-            onStats_origin(msg)
-        }
-    }
 }
-
